@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"test_compas/structs"
 	"time"
 
+	"github.com/jinzhu/gorm"
 	"github.com/labstack/echo/v4"
 )
 
@@ -31,7 +31,7 @@ func UserIndex(c echo.Context) error {
 	query := "SELECT id, name FROM user"
 	var data []structs.User
 	err := db.Raw(query).Scan(&data)
-	if err.Error != nil && err.Error != sql.ErrNoRows {
+	if err.Error != nil && err.Error != gorm.ErrRecordNotFound {
 		log.Println(err.Error)
 		resp["status"] = "error"
 		resp["message"] = err.Error
@@ -41,7 +41,7 @@ func UserIndex(c echo.Context) error {
 		query = "SELECT point FROM user_point WHERE user_id=" + data[i].Id
 		var point structs.UserPoint
 		err = db.Raw(query).Scan(&point)
-		if err.Error != nil && err.Error != sql.ErrNoRows {
+		if err.Error != nil && err.Error != gorm.ErrRecordNotFound {
 			log.Println(err.Error)
 			resp["status"] = "error"
 			resp["message"] = err.Error
@@ -52,7 +52,7 @@ func UserIndex(c echo.Context) error {
 		query = "SELECT point, point_final FROM user_point_history WHERE user_id=" + data[i].Id
 		var pointHistory []structs.UserPointHistory
 		err = db.Raw(query).Scan(&pointHistory)
-		if err.Error != nil && err.Error != sql.ErrNoRows {
+		if err.Error != nil && err.Error != gorm.ErrRecordNotFound {
 			log.Println(err.Error)
 			resp["status"] = "error"
 			resp["message"] = err.Error
@@ -83,7 +83,7 @@ func UserDetail(c echo.Context) error {
 	query := "SELECT id, name FROM user WHERE id=" + id
 	var user structs.User
 	err := db.Raw(query).Scan(&user)
-	if err.Error != nil && err.Error != sql.ErrNoRows {
+	if err.Error != nil && err.Error != gorm.ErrRecordNotFound {
 		log.Println(err.Error)
 		resp["status"] = "error"
 		resp["message"] = err.Error
@@ -93,7 +93,7 @@ func UserDetail(c echo.Context) error {
 	query = "SELECT point FROM user_point WHERE user_id=" + id
 	var point structs.UserPoint
 	err = db.Raw(query).Scan(&point)
-	if err.Error != nil && err.Error != sql.ErrNoRows {
+	if err.Error != nil && err.Error != gorm.ErrRecordNotFound {
 		log.Println(err.Error)
 		resp["status"] = "error"
 		resp["message"] = err.Error
@@ -104,7 +104,7 @@ func UserDetail(c echo.Context) error {
 	query = "SELECT point, point_final FROM user_point_history WHERE user_id=" + id
 	var pointHistory []structs.UserPointHistory
 	err = db.Raw(query).Scan(&pointHistory)
-	if err.Error != nil && err.Error != sql.ErrNoRows {
+	if err.Error != nil && err.Error != gorm.ErrRecordNotFound {
 		log.Println(err.Error)
 		resp["status"] = "error"
 		resp["message"] = err.Error
@@ -170,7 +170,7 @@ func UserPoint(c echo.Context) error {
 		query := "SELECT point FROM user_point WHERE user_id=" + id
 		var pointDb structs.UserPoint
 		errs := db.Raw(query).Scan(&pointDb)
-		if errs.Error == sql.ErrNoRows {
+		if errs.Error == gorm.ErrRecordNotFound {
 			_, err = db.DB().Exec("INSERT INTO user_point (user_id, point) VALUES (?, ?)", id, point)
 			if err != nil {
 				log.Println(err.Error())
@@ -236,14 +236,14 @@ func UserPointMinus(c echo.Context) error {
 	query := "SELECT point FROM user_point WHERE user_id=" + id
 	var pointDb structs.UserPoint
 	errs := db.Raw(query).Scan(&pointDb)
-	if errs.Error == sql.ErrNoRows {
+	if errs.Error == gorm.ErrRecordNotFound {
 		resp["status"] = "error"
-		resp["message"] = "Not enough balance"
+		resp["message"] = "Not enough point"
 		return c.JSON(http.StatusInternalServerError, resp)
 	} else {
 		if pointDb.Point < pointFinal {
 			resp["status"] = "error"
-			resp["message"] = "Not enough balance"
+			resp["message"] = "Not enough point"
 			return c.JSON(http.StatusInternalServerError, resp)
 		}
 	}
@@ -278,17 +278,22 @@ func UserPointMinus(c echo.Context) error {
 		query := "SELECT point FROM user_point WHERE user_id=" + id
 		var pointDb structs.UserPoint
 		errs := db.Raw(query).Scan(&pointDb)
-		if errs.Error == sql.ErrNoRows {
-			_, err = db.DB().Exec("INSERT INTO user_point (user_id, point) VALUES (?, ?)", id, point)
-			if err != nil {
-				log.Println(err.Error())
+		if errs.Error == gorm.ErrRecordNotFound {
+			resp["status"] = "error"
+			resp["message"] = "Not enough point"
+			mrb, _ = json.MarshalIndent(resp, "", "  ")
+			log.Println("UserPoint() redis mrb : " + string(mrb))
+			_ = rc.RedisSet(context.Background(), ticket, string(mrb), messageDuration)
+			return
+		} else {
+			if pointDb.Point < pointFinal {
 				resp["status"] = "error"
-				resp["message"] = err.Error
+				resp["message"] = "Not enough point"
 				mrb, _ = json.MarshalIndent(resp, "", "  ")
 				log.Println("UserPoint() redis mrb : " + string(mrb))
 				_ = rc.RedisSet(context.Background(), ticket, string(mrb), messageDuration)
+				return
 			}
-		} else {
 			pointFinal = pointDb.Point - point
 			_, err = db.DB().Exec("UPDATE user_point SET point=? WHERE user_id=?", pointFinal, id)
 			if err != nil {
